@@ -1,0 +1,185 @@
+// Copyright (c) Ekstra Software
+// SPDX-License-Identifier: MPL-2.0
+
+package provider
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// Client is a minimal HTTP client for the Certificate Checker REST API (/api/v1).
+// The API is deliberately small: domains are immutable, so there is no update call.
+type Client struct {
+	endpoint   string
+	token      string
+	userAgent  string
+	httpClient *http.Client
+}
+
+// Domain mirrors the public API contract of a domain. Level and the timestamps are
+// pointers because they are null until the first successful certificate check.
+type Domain struct {
+	ID                  int64   `json:"id"`
+	Hostname            string  `json:"hostname"`
+	DaysUntilExpiration *int64  `json:"days_until_expiration"`
+	Level               *string `json:"level"`
+	LastCheckedAt       *string `json:"last_checked_at"`
+	CreatedAt           *string `json:"created_at"`
+}
+
+// APIError carries the HTTP status and the API's message so callers can translate
+// specific statuses (403 plan gate, 404 gone, 429 rate limit, 503 kill switch) into
+// actionable diagnostics.
+type APIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API returned HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+// IsNotFound reports whether the error is the API's 404 — which the API also returns
+// for domains owned by someone else, indistinguishable from non-existent ones.
+func IsNotFound(err error) bool {
+	apiErr, ok := err.(*APIError)
+
+	return ok && apiErr.StatusCode == http.StatusNotFound
+}
+
+func NewClient(endpoint, token, version string) *Client {
+	return &Client{
+		endpoint:   strings.TrimRight(endpoint, "/"),
+		token:      token,
+		userAgent:  "terraform-provider-certificatechecker/" + version,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// GetDomain fetches one domain by id.
+func (c *Client) GetDomain(ctx context.Context, id string) (*Domain, error) {
+	var envelope struct {
+		Data Domain `json:"data"`
+	}
+
+	if err := c.do(ctx, http.MethodGet, "/api/v1/domains/"+id, nil, &envelope); err != nil {
+		return nil, err
+	}
+
+	return &envelope.Data, nil
+}
+
+// FindDomainByHostname walks the paginated list until it finds an exact hostname
+// match. Nil without error means no domain with that hostname exists.
+func (c *Client) FindDomainByHostname(ctx context.Context, hostname string) (*Domain, error) {
+	for page := 1; ; page++ {
+		var envelope struct {
+			Data  []Domain `json:"data"`
+			Links struct {
+				Next *string `json:"next"`
+			} `json:"links"`
+		}
+
+		path := fmt.Sprintf("/api/v1/domains?per_page=100&page=%d", page)
+		if err := c.do(ctx, http.MethodGet, path, nil, &envelope); err != nil {
+			return nil, err
+		}
+
+		for i := range envelope.Data {
+			if envelope.Data[i].Hostname == hostname {
+				return &envelope.Data[i], nil
+			}
+		}
+
+		if envelope.Links.Next == nil {
+			return nil, nil
+		}
+	}
+}
+
+// CreateDomain registers a hostname; the first certificate check is queued
+// server-side, so the returned expiry fields start out null.
+func (c *Client) CreateDomain(ctx context.Context, hostname string) (*Domain, error) {
+	var envelope struct {
+		Data Domain `json:"data"`
+	}
+
+	body := map[string]string{"hostname": hostname}
+	if err := c.do(ctx, http.MethodPost, "/api/v1/domains", body, &envelope); err != nil {
+		return nil, err
+	}
+
+	return &envelope.Data, nil
+}
+
+// DeleteDomain removes a domain by id.
+func (c *Client) DeleteDomain(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/domains/"+id, nil, nil)
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	var reader io.Reader
+
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encoding request body: %w", err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, reader)
+	if err != nil {
+		return fmt.Errorf("building request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("calling %s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return &APIError{StatusCode: resp.StatusCode, Message: apiMessage(resp.Body)}
+	}
+
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("decoding response of %s %s: %w", method, path, err)
+		}
+	}
+
+	return nil
+}
+
+// apiMessage extracts Laravel's {"message": "..."} error body, falling back to the
+// raw body so unexpected responses still surface something readable.
+func apiMessage(body io.Reader) string {
+	raw, err := io.ReadAll(io.LimitReader(body, 4096))
+	if err != nil {
+		return "unreadable response body"
+	}
+
+	var envelope struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Message != "" {
+		return envelope.Message
+	}
+
+	return strings.TrimSpace(string(raw))
+}
