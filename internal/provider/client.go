@@ -23,10 +23,11 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// Domain mirrors the public API contract of a domain. Level and the timestamps are
-// pointers because they are null until the first successful certificate check.
+// Domain mirrors the public API contract of a domain. The id is a uuid string.
+// Level and the timestamps are pointers because they are null until the first
+// successful certificate check.
 type Domain struct {
-	ID                  int64   `json:"id"`
+	ID                  string  `json:"id"`
 	Hostname            string  `json:"hostname"`
 	DaysUntilExpiration *int64  `json:"days_until_expiration"`
 	Level               *string `json:"level"`

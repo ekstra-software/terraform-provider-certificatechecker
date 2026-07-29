@@ -12,23 +12,28 @@ import (
 	"testing"
 )
 
-// fakeAPI is a tiny in-memory stand-in for the Certificate Checker API, close enough
-// to exercise the client: bearer auth, the {"data": ...} envelopes, pagination links
-// and Laravel-style {"message": ...} errors.
+/*
+fakeAPI is a tiny in-memory stand-in for the Certificate Checker API, close enough
+to exercise the client: bearer auth, uuid ids, the {"data": ...} envelopes,
+pagination links and Laravel-style {"message": ...} errors.
+*/
 type fakeAPI struct {
 	token   string
-	domains map[int64]*Domain
-	nextID  int64
+	domains map[string]*Domain
+	order   []string
+	nextID  int
 }
 
 func newFakeAPI() *fakeAPI {
-	return &fakeAPI{token: "secret-token", domains: map[int64]*Domain{}, nextID: 1}
+	return &fakeAPI{token: "secret-token", domains: map[string]*Domain{}}
 }
 
 func (f *fakeAPI) add(hostname string) *Domain {
-	domain := &Domain{ID: f.nextID, Hostname: hostname}
-	f.domains[f.nextID] = domain
 	f.nextID++
+	id := fmt.Sprintf("0198aaaa-0000-7000-8000-%012d", f.nextID)
+	domain := &Domain{ID: id, Hostname: hostname}
+	f.domains[id] = domain
+	f.order = append(f.order, id)
 
 	return domain
 }
@@ -46,7 +51,7 @@ func (f *fakeAPI) handler() http.Handler {
 		fmt.Sscanf(r.URL.Query().Get("page"), "%d", &page)
 
 		all := make([]*Domain, 0, len(f.domains))
-		for id := int64(1); id < f.nextID; id++ {
+		for _, id := range f.order {
 			if domain, ok := f.domains[id]; ok {
 				all = append(all, domain)
 			}
@@ -114,10 +119,7 @@ func (f *fakeAPI) handler() http.Handler {
 }
 
 func (f *fakeAPI) find(id string) *Domain {
-	var parsed int64
-	fmt.Sscanf(id, "%d", &parsed)
-
-	return f.domains[parsed]
+	return f.domains[id]
 }
 
 func (f *fakeAPI) authorized(w http.ResponseWriter, r *http.Request) bool {
@@ -154,11 +156,11 @@ func TestCreateGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if created.Hostname != "example.com" || created.ID == 0 {
+	if created.Hostname != "example.com" || created.ID == "" {
 		t.Fatalf("unexpected created domain: %+v", created)
 	}
 
-	got, err := client.GetDomain(ctx, "1")
+	got, err := client.GetDomain(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -166,11 +168,11 @@ func TestCreateGetDelete(t *testing.T) {
 		t.Fatalf("unexpected hostname: %q", got.Hostname)
 	}
 
-	if err := client.DeleteDomain(ctx, "1"); err != nil {
+	if err := client.DeleteDomain(ctx, created.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
-	if _, err := client.GetDomain(ctx, "1"); !IsNotFound(err) {
+	if _, err := client.GetDomain(ctx, created.ID); !IsNotFound(err) {
 		t.Fatalf("expected not-found after delete, got: %v", err)
 	}
 }

@@ -32,8 +32,8 @@ resource "certificatechecker_domain" "site" {
 
 ## Import
 
-Import a domain by its id:
+Import a domain by its id (shown by `GET /api/v1/domains`):
 
 ```shell
-terraform import certificatechecker_domain.site 42
+terraform import certificatechecker_domain.site 0198aaaa-0000-7000-8000-000000000001
 ```

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -187,7 +186,7 @@ func (r *domainResource) ImportState(ctx context.Context, req resource.ImportSta
 
 // fill copies the API representation into the Terraform model.
 func (m *domainModel) fill(domain *Domain) {
-	m.ID = types.StringValue(strconv.FormatInt(domain.ID, 10))
+	m.ID = types.StringValue(domain.ID)
 	m.Hostname = types.StringValue(domain.Hostname)
 	m.DaysUntilExpiration = types.Int64PointerValue(domain.DaysUntilExpiration)
 	m.Level = types.StringPointerValue(domain.Level)
