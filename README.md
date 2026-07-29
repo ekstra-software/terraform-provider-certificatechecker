@@ -43,11 +43,17 @@ go build ./...
 go test ./...
 ```
 
-Acceptance tests run against a real Certificate Checker installation — use a local development environment with a test account on a plan with API write access, never production:
+The unit tests run against a built-in fake of the API, so `go test ./...` works for everyone — Certificate Checker itself is closed source, and no local installation is needed or available.
+
+Acceptance tests (`TestAcc*`) are for maintainers only: they run against a real Certificate Checker development installation with a test account on a plan with API write access — never production. When testing with OpenTofu, point the framework at the tofu binary and its registry host:
 
 ```sh
+TF_ACC=1 \
+TF_ACC_TERRAFORM_PATH=$(which tofu) \
+TF_ACC_PROVIDER_HOST=registry.opentofu.org \
+TF_ACC_PROVIDER_NAMESPACE=ekstra-software \
 CERTIFICATECHECKER_ENDPOINT=http://certificate-checker.localhost \
-CERTIFICATECHECKER_API_TOKEN=<token> TF_ACC=1 go test ./... -v
+CERTIFICATECHECKER_API_TOKEN=<token> go test ./... -v -run TestAcc
 ```
 
 To try a local build in OpenTofu/Terraform, point a [dev override](https://opentofu.org/docs/cli/config/config-file/#development-overrides-for-provider-developers) at the build directory in `~/.terraformrc` / `~/.tofurc`:
