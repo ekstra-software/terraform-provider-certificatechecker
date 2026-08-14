@@ -46,6 +46,10 @@ func (d *domainDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 				Computed:    true,
 				Description: "Hostname of the domain. Provide either id or hostname.",
 			},
+			"uptime_checks": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether this domain is pinged for uptime, on top of its certificate check.",
+			},
 			"days_until_expiration": schema.Int64Attribute{
 				Computed:    true,
 				Description: "Days until the certificate expires, per the account's expiration strategy. Null until the first successful check.",

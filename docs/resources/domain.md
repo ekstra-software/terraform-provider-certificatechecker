@@ -6,13 +6,20 @@ description: |-
 
 # certificatechecker_domain (Resource)
 
-A domain monitored by Certificate Checker. Domains are immutable: changing the hostname replaces the domain (and starts a fresh check history). Requires a plan with API write access.
+A domain monitored by Certificate Checker. Domains are immutable apart from their uptime setting: changing the hostname replaces the domain (and starts a fresh check history). Requires a plan with API write access.
 
 ## Example Usage
 
 ```terraform
 resource "certificatechecker_domain" "site" {
   hostname = "example.com"
+}
+
+resource "certificatechecker_domain" "mail" {
+  hostname = "mail.example.com"
+
+  # This host serves no website, so watch its certificate but do not ping it.
+  uptime_checks = false
 }
 ```
 
@@ -21,6 +28,10 @@ resource "certificatechecker_domain" "site" {
 ### Required
 
 - `hostname` (String) Bare hostname to monitor, e.g. `example.com` — no scheme or path. The certificate served on port 443 is checked. Changing it replaces the domain.
+
+### Optional
+
+- `uptime_checks` (Boolean) Whether this domain is pinged for uptime, on top of its certificate check. Defaults to `true`; set it to `false` for a hostname that serves no website, such as a mail host. Leaving it out adopts whatever the account has set, so existing configurations keep working unchanged. Changing it is an in-place update.
 
 ### Read-Only
 

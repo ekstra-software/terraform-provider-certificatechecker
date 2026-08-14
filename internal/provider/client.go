@@ -15,7 +15,8 @@ import (
 )
 
 // Client is a minimal HTTP client for the Certificate Checker REST API (/api/v1).
-// The API is deliberately small: domains are immutable, so there is no update call.
+// The API is deliberately small: domains are immutable apart from their uptime flag,
+// so the only update call is the PATCH that toggles it.
 type Client struct {
 	endpoint   string
 	token      string
@@ -25,12 +26,15 @@ type Client struct {
 
 // Domain mirrors the public API contract of a domain. The id is a uuid string.
 // Level and the timestamps are pointers because they are null until the first
-// successful certificate check.
+// successful certificate check. UptimeEnabled is a pointer as well, so that a
+// response without the field (an older API) reads as "unspecified" rather than
+// as false — the server-side default is on.
 type Domain struct {
 	ID                  string  `json:"id"`
 	Hostname            string  `json:"hostname"`
 	DaysUntilExpiration *int64  `json:"days_until_expiration"`
 	Level               *string `json:"level"`
+	UptimeEnabled       *bool   `json:"uptime_enabled"`
 	LastCheckedAt       *string `json:"last_checked_at"`
 	CreatedAt           *string `json:"created_at"`
 }
@@ -106,14 +110,34 @@ func (c *Client) FindDomainByHostname(ctx context.Context, hostname string) (*Do
 }
 
 // CreateDomain registers a hostname; the first certificate check is queued
-// server-side, so the returned expiry fields start out null.
-func (c *Client) CreateDomain(ctx context.Context, hostname string) (*Domain, error) {
+// server-side, so the returned expiry fields start out null. A nil uptimeEnabled
+// leaves the field out of the request, which lets the API apply its own default.
+func (c *Client) CreateDomain(ctx context.Context, hostname string, uptimeEnabled *bool) (*Domain, error) {
 	var envelope struct {
 		Data Domain `json:"data"`
 	}
 
-	body := map[string]string{"hostname": hostname}
+	body := map[string]any{"hostname": hostname}
+	if uptimeEnabled != nil {
+		body["uptime_enabled"] = *uptimeEnabled
+	}
+
 	if err := c.do(ctx, http.MethodPost, "/api/v1/domains", body, &envelope); err != nil {
+		return nil, err
+	}
+
+	return &envelope.Data, nil
+}
+
+// UpdateDomain switches uptime checks on or off. It is the only mutable part of a
+// domain: the API's PATCH accepts this one field and refuses anything else.
+func (c *Client) UpdateDomain(ctx context.Context, id string, uptimeEnabled bool) (*Domain, error) {
+	var envelope struct {
+		Data Domain `json:"data"`
+	}
+
+	body := map[string]any{"uptime_enabled": uptimeEnabled}
+	if err := c.do(ctx, http.MethodPatch, "/api/v1/domains/"+id, body, &envelope); err != nil {
 		return nil, err
 	}
 

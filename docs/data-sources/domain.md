@@ -29,6 +29,7 @@ output "days_until_expiration" {
 
 ### Read-Only
 
+- `uptime_checks` (Boolean) Whether this domain is pinged for uptime, on top of its certificate check.
 - `days_until_expiration` (Number) Days until the certificate expires, per the account's expiration strategy. Null until the first successful check.
 - `level` (String) Expiration level zone: info, warning, error, critical or fatal. Null until the first successful check.
 - `last_checked_at` (String) Time of the latest successful certificate check (ISO 8601, UTC).

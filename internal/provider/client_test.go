@@ -31,7 +31,8 @@ func newFakeAPI() *fakeAPI {
 func (f *fakeAPI) add(hostname string) *Domain {
 	f.nextID++
 	id := fmt.Sprintf("0198aaaa-0000-7000-8000-%012d", f.nextID)
-	domain := &Domain{ID: id, Hostname: hostname}
+	enabled := true
+	domain := &Domain{ID: id, Hostname: hostname, UptimeEnabled: &enabled}
 	f.domains[id] = domain
 	f.order = append(f.order, id)
 
@@ -93,11 +94,47 @@ func (f *fakeAPI) handler() http.Handler {
 		}
 
 		var body struct {
-			Hostname string `json:"hostname"`
+			Hostname      string `json:"hostname"`
+			UptimeEnabled *bool  `json:"uptime_enabled"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 
-		writeJSON(w, http.StatusCreated, map[string]any{"data": f.add(body.Hostname)})
+		domain := f.add(body.Hostname)
+		// Absent means the server default (on), which add() already applied.
+		if body.UptimeEnabled != nil {
+			domain.UptimeEnabled = body.UptimeEnabled
+		}
+
+		writeJSON(w, http.StatusCreated, map[string]any{"data": domain})
+	})
+
+	mux.HandleFunc("PATCH /api/v1/domains/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !f.authorized(w, r) {
+			return
+		}
+
+		domain := f.find(r.PathValue("id"))
+		if domain == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"message": "No query results"})
+
+			return
+		}
+
+		// Like the real endpoint: the uptime flag is required, and nothing else is accepted.
+		var body struct {
+			Hostname      *string `json:"hostname"`
+			UptimeEnabled *bool   `json:"uptime_enabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		if body.UptimeEnabled == nil || body.Hostname != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "The given data was invalid."})
+
+			return
+		}
+
+		domain.UptimeEnabled = body.UptimeEnabled
+		writeJSON(w, http.StatusOK, map[string]any{"data": domain})
 	})
 
 	mux.HandleFunc("DELETE /api/v1/domains/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -152,12 +189,15 @@ func TestCreateGetDelete(t *testing.T) {
 	client := newTestClient(t, api)
 	ctx := context.Background()
 
-	created, err := client.CreateDomain(ctx, "example.com")
+	created, err := client.CreateDomain(ctx, "example.com", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if created.Hostname != "example.com" || created.ID == "" {
 		t.Fatalf("unexpected created domain: %+v", created)
+	}
+	if created.UptimeEnabled == nil || !*created.UptimeEnabled {
+		t.Fatalf("expected uptime checks on by default, got %+v", created.UptimeEnabled)
 	}
 
 	got, err := client.GetDomain(ctx, created.ID)
@@ -174,6 +214,38 @@ func TestCreateGetDelete(t *testing.T) {
 
 	if _, err := client.GetDomain(ctx, created.ID); !IsNotFound(err) {
 		t.Fatalf("expected not-found after delete, got: %v", err)
+	}
+}
+
+func TestUptimeChecksCanBeSetAtCreateAndChangedAfterwards(t *testing.T) {
+	api := newFakeAPI()
+	client := newTestClient(t, api)
+	ctx := context.Background()
+
+	off := false
+	created, err := client.CreateDomain(ctx, "mail.example", &off)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.UptimeEnabled == nil || *created.UptimeEnabled {
+		t.Fatalf("expected uptime checks off, got %+v", created.UptimeEnabled)
+	}
+
+	updated, err := client.UpdateDomain(ctx, created.ID, true)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.UptimeEnabled == nil || !*updated.UptimeEnabled {
+		t.Fatalf("expected uptime checks on after update, got %+v", updated.UptimeEnabled)
+	}
+
+	// The change sticks server-side, rather than only showing up in the response.
+	got, err := client.GetDomain(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.UptimeEnabled == nil || !*got.UptimeEnabled {
+		t.Fatalf("expected uptime checks on when read back, got %+v", got.UptimeEnabled)
 	}
 }
 
