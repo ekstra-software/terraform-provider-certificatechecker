@@ -23,6 +23,15 @@ resource "certificatechecker_domain" "site" {
 }
 ```
 
+## Account-level errors
+
+Two situations close the whole API, regardless of plan, and answer `403` on every request with a stable `error` code next to the human-readable message:
+
+- `payment_required` — an invoice has been overdue long enough to suspend the account. Paying it (dashboard → **Settings → Invoices**) restores access right away.
+- `legal_acceptance_required` — the terms have changed and the account owner has to accept them in the dashboard before the API answers again.
+
+The provider recognizes both codes and explains them in its error output; neither is a problem with your configuration or state.
+
 ## Schema
 
 ### Optional

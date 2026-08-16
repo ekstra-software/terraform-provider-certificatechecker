@@ -39,11 +39,13 @@ type Domain struct {
 	CreatedAt           *string `json:"created_at"`
 }
 
-// APIError carries the HTTP status and the API's message so callers can translate
-// specific statuses (403 plan gate, 404 gone, 429 rate limit, 503 kill switch) into
-// actionable diagnostics.
+// APIError carries the HTTP status, the API's message and — where the API sends one —
+// its stable error code, so callers can translate specific refusals (403 plan gate,
+// 403 account-level, 404 gone, 429 rate limit, 503 kill switch) into actionable
+// diagnostics. The code is empty for refusals that carry only a message.
 type APIError struct {
 	StatusCode int
+	Code       string
 	Message    string
 }
 
@@ -179,7 +181,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return &APIError{StatusCode: resp.StatusCode, Message: apiMessage(resp.Body)}
+		return newAPIError(resp.StatusCode, resp.Body)
 	}
 
 	if out != nil {
@@ -191,20 +193,22 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	return nil
 }
 
-// apiMessage extracts Laravel's {"message": "..."} error body, falling back to the
+// newAPIError extracts Laravel's {"message": "..."} error body, plus the stable
+// "error" code that account-level refusals carry next to it, falling back to the
 // raw body so unexpected responses still surface something readable.
-func apiMessage(body io.Reader) string {
+func newAPIError(statusCode int, body io.Reader) *APIError {
 	raw, err := io.ReadAll(io.LimitReader(body, 4096))
 	if err != nil {
-		return "unreadable response body"
+		return &APIError{StatusCode: statusCode, Message: "unreadable response body"}
 	}
 
 	var envelope struct {
+		Code    string `json:"error"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Message != "" {
-		return envelope.Message
+		return &APIError{StatusCode: statusCode, Code: envelope.Code, Message: envelope.Message}
 	}
 
-	return strings.TrimSpace(string(raw))
+	return &APIError{StatusCode: statusCode, Message: strings.TrimSpace(string(raw))}
 }

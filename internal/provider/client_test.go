@@ -288,6 +288,48 @@ func TestAPIErrorCarriesStatusAndMessage(t *testing.T) {
 	}
 }
 
+// The account-level refusals (a suspended account, unaccepted terms) answer 403 with a
+// stable "error" code next to the human message; the client must pass that code along.
+func TestAPIErrorCarriesStableErrorCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":        "payment_required",
+			"message":      "An invoice is more than 30 days overdue, so the service is suspended.",
+			"invoices_url": "https://certificate-checker.com/dashboard/settings/invoices",
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "token", "test").GetDomain(context.Background(), "1")
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected APIError, got %T: %v", err, err)
+	}
+	if apiErr.StatusCode != http.StatusForbidden || apiErr.Code != "payment_required" || apiErr.Message == "" {
+		t.Fatalf("unexpected error: %+v", apiErr)
+	}
+}
+
+// All three flavours of 403 read differently in the diagnostic: without this, a
+// suspended account looks like a plan that needs upgrading.
+func TestAPIDiagnosticTellsAccountLevel403sApart(t *testing.T) {
+	cases := []struct {
+		code        string
+		wantSummary string
+	}{
+		{codePaymentRequired, "Certificate Checker account is suspended"},
+		{codeLegalAcceptanceRequired, "Certificate Checker terms need to be accepted"},
+		{"", "Plan does not allow this API operation"},
+	}
+
+	for _, tc := range cases {
+		diagnostic := apiDiagnostic("creating domain", &APIError{StatusCode: http.StatusForbidden, Code: tc.code, Message: "refused"})
+		if diagnostic.Summary() != tc.wantSummary {
+			t.Fatalf("code %q: expected summary %q, got %q", tc.code, tc.wantSummary, diagnostic.Summary())
+		}
+	}
+}
+
 func newTestServerURL(t *testing.T, api *fakeAPI) string {
 	t.Helper()
 

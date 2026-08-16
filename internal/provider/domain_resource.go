@@ -238,12 +238,35 @@ func (m *domainModel) fill(domain *Domain) {
 	m.CreatedAt = types.StringPointerValue(domain.CreatedAt)
 }
 
-// apiDiagnostic translates API errors into actionable diagnostics: the tier gate,
-// the temporary kill switch and the rate limit each get their own explanation.
+// Stable error codes the API sends next to its message on account-level 403s, so
+// clients can tell them apart from the plan gate without matching on English prose.
+const (
+	codePaymentRequired         = "payment_required"
+	codeLegalAcceptanceRequired = "legal_acceptance_required"
+)
+
+// apiDiagnostic translates API errors into actionable diagnostics: the account-level
+// refusals, the tier gate, the temporary kill switch and the rate limit each get
+// their own explanation.
 func apiDiagnostic(action string, err error) diag.Diagnostic {
 	if apiErr, ok := err.(*APIError); ok {
 		switch apiErr.StatusCode {
 		case http.StatusForbidden:
+			// A 403 is not always the plan gate: a suspended account and unaccepted
+			// terms answer 403 on every endpoint, and name themselves with a code.
+			switch apiErr.Code {
+			case codePaymentRequired:
+				return diag.NewErrorDiagnostic(
+					"Certificate Checker account is suspended",
+					fmt.Sprintf("While %s, the API refused: %s\n\nThe account has an invoice overdue long enough to suspend the service, which closes the API for every token on the account — this is not a problem with your configuration or state. Paying the invoice (dashboard → Settings → Invoices) restores access right away.", action, apiErr.Message),
+				)
+			case codeLegalAcceptanceRequired:
+				return diag.NewErrorDiagnostic(
+					"Certificate Checker terms need to be accepted",
+					fmt.Sprintf("While %s, the API refused: %s\n\nThe account owner has to sign in to the dashboard and accept the updated terms; the API answers again right after — this is not a problem with your configuration or state.", action, apiErr.Message),
+				)
+			}
+
 			return diag.NewErrorDiagnostic(
 				"Plan does not allow this API operation",
 				fmt.Sprintf("While %s, the API refused: %s\n\nManaging domains requires a Certificate Checker plan with API write access (Business and up).", action, apiErr.Message),
