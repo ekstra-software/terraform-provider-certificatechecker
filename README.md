@@ -43,6 +43,15 @@ data "certificatechecker_certificate" "site" {
 output "certificate_fingerprint" {
   value = data.certificatechecker_certificate.site.fingerprint_sha256
 }
+
+# The uptime summary: current state and the percentage over the last 30 days.
+data "certificatechecker_uptime" "site" {
+  domain_id = certificatechecker_domain.site.id
+}
+
+output "site_uptime_30d" {
+  value = data.certificatechecker_uptime.site.uptime_30d
+}
 ```
 
 ## Requirements
@@ -51,6 +60,8 @@ output "certificate_fingerprint" {
 - Reading domains requires a plan with API access (Expert and up); managing them requires API write access (Business and up).
 
 The `certificatechecker_certificate` data source reads the certificate a domain currently serves — subject, issuer, validity period, covered names, fingerprints and key — so it can be compared or alerted on elsewhere. Until the domain's first successful check it answers with null values and a warning, not an error.
+
+The `certificatechecker_uptime` data source reads the uptime summary of a domain — current state and since when, the uptime percentage over the last 30 and 90 days, the response times of the current period — the way the dashboard shows it. It always answers; before the first ping the state is `unknown` with null measurements and a warning. The values change with every ping, so use them in outputs and checks rather than as resource arguments.
 
 Domains are immutable in Certificate Checker apart from their uptime setting: changing the `hostname` replaces the domain and starts a fresh check history — exactly Terraform's replace semantics — while `uptime_checks` is changed in place.
 
