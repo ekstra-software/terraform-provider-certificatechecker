@@ -39,6 +39,29 @@ type Domain struct {
 	CreatedAt           *string `json:"created_at"`
 }
 
+/*
+Certificate mirrors the public API contract of the certificate behind a domain's day
+count: the one the most recent successful check saw, or, for a hostname that serves a
+different certificate per server, the one of those that expires first. Every scalar is a
+pointer because a check whose stored payload can no longer be read answers with every
+field null rather than with an error.
+*/
+type Certificate struct {
+	Subject            *string  `json:"subject"`
+	Issuer             *string  `json:"issuer"`
+	IssuerOrganization *string  `json:"issuer_organization"`
+	SerialNumber       *string  `json:"serial_number"`
+	ValidFrom          *string  `json:"valid_from"`
+	ValidTo            *string  `json:"valid_to"`
+	Names              []string `json:"names"`
+	FingerprintSHA256  *string  `json:"fingerprint_sha256"`
+	FingerprintSHA1    *string  `json:"fingerprint_sha1"`
+	SignatureAlgorithm *string  `json:"signature_algorithm"`
+	KeyType            *string  `json:"key_type"`
+	KeyBits            *int64   `json:"key_bits"`
+	RemoteAddress      *string  `json:"remote_address"`
+}
+
 // APIError carries the HTTP status, the API's message and — where the API sends one —
 // its stable error code, so callers can translate specific refusals (403 plan gate,
 // 403 account-level, 404 gone, 429 rate limit, 503 kill switch) into actionable
@@ -77,6 +100,21 @@ func (c *Client) GetDomain(ctx context.Context, id string) (*Domain, error) {
 	}
 
 	if err := c.do(ctx, http.MethodGet, "/api/v1/domains/"+id, nil, &envelope); err != nil {
+		return nil, err
+	}
+
+	return &envelope.Data, nil
+}
+
+// GetCertificate fetches the current certificate of a domain. The API answers 404 both for
+// a domain that does not exist (or is not ours) and for one that has no successful check
+// yet; callers that need to tell the two apart look the domain up first.
+func (c *Client) GetCertificate(ctx context.Context, domainID string) (*Certificate, error) {
+	var envelope struct {
+		Data Certificate `json:"data"`
+	}
+
+	if err := c.do(ctx, http.MethodGet, "/api/v1/domains/"+domainID+"/certificate", nil, &envelope); err != nil {
 		return nil, err
 	}
 
