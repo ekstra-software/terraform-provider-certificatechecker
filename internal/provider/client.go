@@ -62,6 +62,35 @@ type Certificate struct {
 	RemoteAddress      *string  `json:"remote_address"`
 }
 
+/*
+Uptime mirrors the public API contract of a domain's uptime summary: what the Uptime section
+of the domain page shows. The summary always exists, also before the first ping — Status is
+then "unknown" and the measurements are null, which is why those are pointers. ResponseTime is
+a pointer as a whole: the API sends null until a ping in the current period got a response.
+*/
+type Uptime struct {
+	Enabled       bool                `json:"enabled"`
+	Paused        bool                `json:"paused"`
+	Status        string              `json:"status"`
+	Since         *string             `json:"since"`
+	LastCheckedAt *string             `json:"last_checked_at"`
+	Percentages   UptimePercentages   `json:"uptime"`
+	ResponseTime  *UptimeResponseTime `json:"response_time"`
+}
+
+// UptimePercentages holds the observed uptime over the two windows the dashboard shows.
+type UptimePercentages struct {
+	Last30Days *float64 `json:"30d"`
+	Last90Days *float64 `json:"90d"`
+}
+
+// UptimeResponseTime holds the response times of the current period, in milliseconds.
+type UptimeResponseTime struct {
+	AverageMs *int64 `json:"average_ms"`
+	MinMs     *int64 `json:"min_ms"`
+	MaxMs     *int64 `json:"max_ms"`
+}
+
 // APIError carries the HTTP status, the API's message and — where the API sends one —
 // its stable error code, so callers can translate specific refusals (403 plan gate,
 // 403 account-level, 404 gone, 429 rate limit, 503 kill switch) into actionable
@@ -115,6 +144,20 @@ func (c *Client) GetCertificate(ctx context.Context, domainID string) (*Certific
 	}
 
 	if err := c.do(ctx, http.MethodGet, "/api/v1/domains/"+domainID+"/certificate", nil, &envelope); err != nil {
+		return nil, err
+	}
+
+	return &envelope.Data, nil
+}
+
+// GetUptime fetches the uptime summary of a domain. Unlike the certificate, the summary exists
+// from the moment the domain does, so a 404 here can only mean an unknown domain.
+func (c *Client) GetUptime(ctx context.Context, domainID string) (*Uptime, error) {
+	var envelope struct {
+		Data Uptime `json:"data"`
+	}
+
+	if err := c.do(ctx, http.MethodGet, "/api/v1/domains/"+domainID+"/uptime", nil, &envelope); err != nil {
 		return nil, err
 	}
 

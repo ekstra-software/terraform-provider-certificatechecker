@@ -21,12 +21,13 @@ type fakeAPI struct {
 	token        string
 	domains      map[string]*Domain
 	certificates map[string]*Certificate
+	uptime       map[string]*Uptime
 	order        []string
 	nextID       int
 }
 
 func newFakeAPI() *fakeAPI {
-	return &fakeAPI{token: "secret-token", domains: map[string]*Domain{}, certificates: map[string]*Certificate{}}
+	return &fakeAPI{token: "secret-token", domains: map[string]*Domain{}, certificates: map[string]*Certificate{}, uptime: map[string]*Uptime{}}
 }
 
 func (f *fakeAPI) add(hostname string) *Domain {
@@ -110,6 +111,26 @@ func (f *fakeAPI) handler() http.Handler {
 		writeJSON(w, http.StatusNotFound, map[string]any{"message": "No query results"})
 	})
 
+	mux.HandleFunc("GET /api/v1/domains/{id}/uptime", func(w http.ResponseWriter, r *http.Request) {
+		if !f.authorized(w, r) {
+			return
+		}
+
+		if domain := f.find(r.PathValue("id")); domain != nil {
+			// Like the real endpoint: the summary exists before the first ping, with status unknown and null measurements.
+			summary, ok := f.uptime[domain.ID]
+			if !ok {
+				summary = &Uptime{Enabled: domain.UptimeEnabled == nil || *domain.UptimeEnabled, Status: "unknown"}
+			}
+
+			writeJSON(w, http.StatusOK, map[string]any{"data": summary})
+
+			return
+		}
+
+		writeJSON(w, http.StatusNotFound, map[string]any{"message": "No query results"})
+	})
+
 	mux.HandleFunc("POST /api/v1/domains", func(w http.ResponseWriter, r *http.Request) {
 		if !f.authorized(w, r) {
 			return
@@ -182,6 +203,11 @@ func (f *fakeAPI) check(domain *Domain, certificate *Certificate) {
 	f.certificates[domain.ID] = certificate
 	checkedAt := "2026-07-23T07:00:00+00:00"
 	domain.LastCheckedAt = &checkedAt
+}
+
+// ping records an uptime summary for a domain, as the checker would have built it up.
+func (f *fakeAPI) ping(domain *Domain, summary *Uptime) {
+	f.uptime[domain.ID] = summary
 }
 
 func (f *fakeAPI) find(id string) *Domain {
@@ -376,6 +402,56 @@ func TestGetCertificateWithNullFields(t *testing.T) {
 	}
 	if got.Subject != nil || got.KeyBits != nil || got.Names != nil {
 		t.Fatalf("expected nil fields, got %+v", got)
+	}
+}
+
+func TestGetUptimeReadsEveryField(t *testing.T) {
+	api := newFakeAPI()
+	domain := api.add("example.com")
+	api.ping(domain, &Uptime{
+		Enabled:       true,
+		Status:        "up",
+		Since:         ptr("2026-07-29T06:20:11+00:00"),
+		LastCheckedAt: ptr("2026-07-29T08:35:11+00:00"),
+		Percentages:   UptimePercentages{Last30Days: ptr(99.87), Last90Days: ptr(99.91)},
+		ResponseTime:  &UptimeResponseTime{AverageMs: ptr(int64(182)), MinMs: ptr(int64(97)), MaxMs: ptr(int64(1240))},
+	})
+	client := newTestClient(t, api)
+
+	got, err := client.GetUptime(context.Background(), domain.ID)
+	if err != nil {
+		t.Fatalf("get uptime: %v", err)
+	}
+	if !got.Enabled || got.Paused || got.Status != "up" {
+		t.Fatalf("unexpected state: %+v", got)
+	}
+	if got.Since == nil || *got.Since != "2026-07-29T06:20:11+00:00" {
+		t.Fatalf("unexpected since: %v", got.Since)
+	}
+	if got.Percentages.Last30Days == nil || *got.Percentages.Last30Days != 99.87 || got.Percentages.Last90Days == nil || *got.Percentages.Last90Days != 99.91 {
+		t.Fatalf("unexpected percentages: %+v", got.Percentages)
+	}
+	if got.ResponseTime == nil || *got.ResponseTime.AverageMs != 182 || *got.ResponseTime.MinMs != 97 || *got.ResponseTime.MaxMs != 1240 {
+		t.Fatalf("unexpected response time: %+v", got.ResponseTime)
+	}
+}
+
+// Before the first ping the summary exists already — status unknown, measurements null — so
+// unlike the certificate there is no 404 to interpret; the client passes the nulls through.
+func TestGetUptimeBeforeFirstPingHasNulls(t *testing.T) {
+	api := newFakeAPI()
+	domain := api.add("fresh.example")
+	client := newTestClient(t, api)
+
+	got, err := client.GetUptime(context.Background(), domain.ID)
+	if err != nil {
+		t.Fatalf("get uptime: %v", err)
+	}
+	if got.Status != "unknown" || !got.Enabled {
+		t.Fatalf("unexpected state before the first ping: %+v", got)
+	}
+	if got.Since != nil || got.LastCheckedAt != nil || got.Percentages.Last30Days != nil || got.ResponseTime != nil {
+		t.Fatalf("expected nil measurements, got %+v", got)
 	}
 }
 
