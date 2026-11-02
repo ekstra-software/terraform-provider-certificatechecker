@@ -34,12 +34,23 @@ data "certificatechecker_domain" "site" {
 output "days_until_expiration" {
   value = data.certificatechecker_domain.site.days_until_expiration
 }
+
+# The certificate itself, as seen by the latest successful check.
+data "certificatechecker_certificate" "site" {
+  domain_id = certificatechecker_domain.site.id
+}
+
+output "certificate_fingerprint" {
+  value = data.certificatechecker_certificate.site.fingerprint_sha256
+}
 ```
 
 ## Requirements
 
 - An API token, created in the dashboard under **Settings → API tokens**.
 - Reading domains requires a plan with API access (Expert and up); managing them requires API write access (Business and up).
+
+The `certificatechecker_certificate` data source reads the certificate a domain currently serves — subject, issuer, validity period, covered names, fingerprints and key — so it can be compared or alerted on elsewhere. Until the domain's first successful check it answers with null values and a warning, not an error.
 
 Domains are immutable in Certificate Checker apart from their uptime setting: changing the `hostname` replaces the domain and starts a fresh check history — exactly Terraform's replace semantics — while `uptime_checks` is changed in place.
 

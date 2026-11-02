@@ -8,7 +8,7 @@ description: |-
 
 Manage the domains that [Certificate Checker](https://certificate-checker.com) monitors for SSL/TLS certificate expiry. Works with both Terraform and OpenTofu.
 
-Reading domains requires a plan with API access (Expert and up); managing them requires API write access (Business and up). Tokens are created in the dashboard under **Settings → API tokens**.
+Reading domains and their certificates requires a plan with API access (Expert and up); managing domains requires API write access (Business and up). Tokens are created in the dashboard under **Settings → API tokens**.
 
 ## Example Usage
 

@@ -18,14 +18,15 @@ to exercise the client: bearer auth, uuid ids, the {"data": ...} envelopes,
 pagination links and Laravel-style {"message": ...} errors.
 */
 type fakeAPI struct {
-	token   string
-	domains map[string]*Domain
-	order   []string
-	nextID  int
+	token        string
+	domains      map[string]*Domain
+	certificates map[string]*Certificate
+	order        []string
+	nextID       int
 }
 
 func newFakeAPI() *fakeAPI {
-	return &fakeAPI{token: "secret-token", domains: map[string]*Domain{}}
+	return &fakeAPI{token: "secret-token", domains: map[string]*Domain{}, certificates: map[string]*Certificate{}}
 }
 
 func (f *fakeAPI) add(hostname string) *Domain {
@@ -81,6 +82,27 @@ func (f *fakeAPI) handler() http.Handler {
 
 		if domain := f.find(r.PathValue("id")); domain != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"data": domain})
+
+			return
+		}
+
+		writeJSON(w, http.StatusNotFound, map[string]any{"message": "No query results"})
+	})
+
+	mux.HandleFunc("GET /api/v1/domains/{id}/certificate", func(w http.ResponseWriter, r *http.Request) {
+		if !f.authorized(w, r) {
+			return
+		}
+
+		if domain := f.find(r.PathValue("id")); domain != nil {
+			// Like the real endpoint: a domain without a successful check is a 404 as well.
+			if certificate, ok := f.certificates[domain.ID]; ok {
+				writeJSON(w, http.StatusOK, map[string]any{"data": certificate})
+
+				return
+			}
+
+			writeJSON(w, http.StatusNotFound, map[string]any{"message": "This domain has no successful check yet."})
 
 			return
 		}
@@ -153,6 +175,13 @@ func (f *fakeAPI) handler() http.Handler {
 	})
 
 	return mux
+}
+
+// check records a successful check for a domain, with the certificate it saw.
+func (f *fakeAPI) check(domain *Domain, certificate *Certificate) {
+	f.certificates[domain.ID] = certificate
+	checkedAt := "2026-07-23T07:00:00+00:00"
+	domain.LastCheckedAt = &checkedAt
 }
 
 func (f *fakeAPI) find(id string) *Domain {
@@ -272,6 +301,86 @@ func TestFindDomainByHostnameFollowsPagination(t *testing.T) {
 	if missing != nil {
 		t.Fatalf("expected nil for absent hostname, got %+v", missing)
 	}
+}
+
+func TestGetCertificateReadsEveryField(t *testing.T) {
+	api := newFakeAPI()
+	domain := api.add("example.com")
+	api.check(domain, &Certificate{
+		Subject:            ptr("example.com"),
+		Issuer:             ptr("R11"),
+		IssuerOrganization: ptr("Let's Encrypt"),
+		SerialNumber:       ptr("057705f414f6b319631a81bcb32158c0267d"),
+		ValidFrom:          ptr("2026-07-23T06:20:11+00:00"),
+		ValidTo:            ptr("2026-09-21T06:20:11+00:00"),
+		Names:              []string{"www.example.com", "example.com"},
+		FingerprintSHA256:  ptr("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"),
+		FingerprintSHA1:    ptr("a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"),
+		SignatureAlgorithm: ptr("RSA-SHA256"),
+		KeyType:            ptr("RSA"),
+		KeyBits:            ptr(int64(2048)),
+		RemoteAddress:      ptr("192.0.2.10:443"),
+	})
+	client := newTestClient(t, api)
+
+	got, err := client.GetCertificate(context.Background(), domain.ID)
+	if err != nil {
+		t.Fatalf("get certificate: %v", err)
+	}
+	if got.Subject == nil || *got.Subject != "example.com" {
+		t.Fatalf("unexpected subject: %v", got.Subject)
+	}
+	if got.ValidTo == nil || *got.ValidTo != "2026-09-21T06:20:11+00:00" {
+		t.Fatalf("unexpected valid_to: %v", got.ValidTo)
+	}
+	if len(got.Names) != 2 || got.Names[0] != "www.example.com" || got.Names[1] != "example.com" {
+		t.Fatalf("unexpected names: %v", got.Names)
+	}
+	if got.KeyBits == nil || *got.KeyBits != 2048 {
+		t.Fatalf("unexpected key_bits: %v", got.KeyBits)
+	}
+	if got.FingerprintSHA256 == nil || *got.FingerprintSHA256 != "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" {
+		t.Fatalf("unexpected sha256 fingerprint: %v", got.FingerprintSHA256)
+	}
+}
+
+// Before the first successful check the API has no certificate to show and answers 404 —
+// the same status as for an unknown domain, which is why the data source looks the domain
+// up first and only then treats a 404 as "not checked yet".
+func TestGetCertificateBeforeFirstCheckIsNotFound(t *testing.T) {
+	api := newFakeAPI()
+	domain := api.add("fresh.example")
+	client := newTestClient(t, api)
+
+	_, err := client.GetCertificate(context.Background(), domain.ID)
+	if !IsNotFound(err) {
+		t.Fatalf("expected not-found before the first check, got: %v", err)
+	}
+
+	if _, err := client.GetDomain(context.Background(), domain.ID); err != nil {
+		t.Fatalf("the domain itself must still resolve: %v", err)
+	}
+}
+
+// A check whose stored payload cannot be read any more answers with every field null; the
+// client must pass that through as nils rather than choke on it.
+func TestGetCertificateWithNullFields(t *testing.T) {
+	api := newFakeAPI()
+	domain := api.add("stale.example")
+	api.check(domain, &Certificate{})
+	client := newTestClient(t, api)
+
+	got, err := client.GetCertificate(context.Background(), domain.ID)
+	if err != nil {
+		t.Fatalf("get certificate: %v", err)
+	}
+	if got.Subject != nil || got.KeyBits != nil || got.Names != nil {
+		t.Fatalf("expected nil fields, got %+v", got)
+	}
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }
 
 func TestAPIErrorCarriesStatusAndMessage(t *testing.T) {

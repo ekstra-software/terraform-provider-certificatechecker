@@ -105,5 +105,6 @@ func (p *certificateCheckerProvider) Resources(_ context.Context) []func() resou
 func (p *certificateCheckerProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewDomainDataSource,
+		NewCertificateDataSource,
 	}
 }
